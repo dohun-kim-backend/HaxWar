@@ -1,4 +1,4 @@
-.PHONY: build clean restore rebuild run-server run-client test test-perf test-load benchmark docker-up docker-down docker-restart docker-logs docker-ps docker-benchmark
+.PHONY: build clean restore rebuild run-server run-client test test-perf test-load benchmark docker-up docker-down docker-restart docker-logs docker-ps docker-benchmark k3d-image
 
 # 솔루션 파일 지정
 SOLUTION = HexWar.sln
@@ -72,3 +72,12 @@ docker-ps:
 # 컨테이너 내에서 벤치마크 테스트 구동
 docker-benchmark:
 	docker compose run --rm hexwar-benchmarks
+
+# ── 5. k3d 이미지 빌드 및 업로드 ──
+K3D_CLUSTER_NAME ?= hexwar-cluster
+IMAGE_NAME ?= hexwar-server-1:latest
+DOCKERFILE_PATH ?= src/HexWar.Server/Dockerfile
+
+k3d-image:
+	docker build -t $(IMAGE_NAME) -f $(DOCKERFILE_PATH) .
+	k3d image import $(IMAGE_NAME) -c $(K3D_CLUSTER_NAME)

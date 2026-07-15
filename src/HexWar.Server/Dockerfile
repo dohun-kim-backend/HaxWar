@@ -21,11 +21,13 @@ RUN dotnet publish -c Release -o /publish /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
 
-# 헬스체크 및 OTel Auto-Instrumentation 설치용 curl, ca-certificates 설치
-RUN apt-get update && apt-get install -y curl ca-certificates && \
-    # OTel Auto-Instrumentation v1.9.0 tar.gz 다운로드 및 압축 해제
+# 헬스체크 및 OTel Auto-Instrumentation 설치용 curl, ca-certificates, unzip 설치
+RUN apt-get update && apt-get install -y curl ca-certificates unzip && \
+    # OTel Auto-Instrumentation v1.9.0 linux-glibc-x64.zip 다운로드 및 압축 해제
     mkdir -p /otel && \
-    curl -L https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases/download/v1.9.0/opentelemetry-dotnet-instrumentation-linux-glibc.tar.gz | tar -xzf - -C /otel && \
+    curl -Lsf https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases/download/v1.9.0/opentelemetry-dotnet-instrumentation-linux-glibc-x64.zip -o /tmp/otel.zip && \
+    unzip -q /tmp/otel.zip -d /otel && \
+    rm /tmp/otel.zip && \
     chmod +x /otel/instrument.sh && \
     rm -rf /var/lib/apt/lists/*
 
