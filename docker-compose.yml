@@ -67,6 +67,16 @@ services:
       - DOTNET_GCLatencyMode=SustainedLowLatency # GC Latency 모드 튜닝
       - Redis__ConnectionString=redis:6379
       - ConnectionStrings__Redis=redis:6379
+      - HEXWAR_NODE_NAME=server-1
+      - OTEL_COLLECTOR_ADDR=http://hexwar-otel-collector:4317
+      - CORECLR_ENABLE_PROFILING=1
+      - CORECLR_PROFILER={918728C2-14F8-4d0b-9611-D6E26B79552C}
+      - CORECLR_PROFILER_PATH=/otel/linux-x64/OpenTelemetry.AutoInstrumentation.Native.so
+      - DOTNET_STARTUP_HOOKS=/otel/net/OpenTelemetry.AutoInstrumentation.StartupHook.dll
+      - OTEL_DOTNET_AUTO_HOME=/otel
+      - OTEL_METRICS_EXPORTER=otlp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://hexwar-otel-collector:4317
+      - OTEL_DOTNET_AUTO_METRICS_ADDITIONAL_SOURCES=HexWar.Diagnostics
     # 헬스체크
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:5000/api/diagnostics/stats" ]
@@ -117,6 +127,16 @@ services:
       - DOTNET_GCLatencyMode=SustainedLowLatency
       - Redis__ConnectionString=redis:6379
       - ConnectionStrings__Redis=redis:6379
+      - HEXWAR_NODE_NAME=server-2
+      - OTEL_COLLECTOR_ADDR=http://hexwar-otel-collector:4317
+      - CORECLR_ENABLE_PROFILING=1
+      - CORECLR_PROFILER={918728C2-14F8-4d0b-9611-D6E26B79552C}
+      - CORECLR_PROFILER_PATH=/otel/linux-x64/OpenTelemetry.AutoInstrumentation.Native.so
+      - DOTNET_STARTUP_HOOKS=/otel/net/OpenTelemetry.AutoInstrumentation.StartupHook.dll
+      - OTEL_DOTNET_AUTO_HOME=/otel
+      - OTEL_METRICS_EXPORTER=otlp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://hexwar-otel-collector:4317
+      - OTEL_DOTNET_AUTO_METRICS_ADDITIONAL_SOURCES=HexWar.Diagnostics
     # 헬스체크
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:5000/api/diagnostics/stats" ]

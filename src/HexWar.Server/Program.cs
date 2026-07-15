@@ -85,6 +85,9 @@ builder.Services.AddGrpcReflection();
 // 정리 백그라운드 서비스 등록
 builder.Services.AddHostedService<SessionCleanupService>();
 
+// DiagnosticsMetrics 싱글톤 등록 (런타임 자동 계측 에이전트가 HexWar.Diagnostics Meter를 자동 감지함)
+builder.Services.AddSingleton<HexWar.Server.Diagnostics.DiagnosticsMetrics>();
+
 // 서비스 상태 확인용 HealthCheck
 builder.Services.AddControllers();
 
