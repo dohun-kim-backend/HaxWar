@@ -1,6 +1,7 @@
 // src/HexWar.Infrastructure/Persistence/RedisGameRoomRepository.cs
 namespace HexWar.Infrastructure.Persistence;
 
+using System.Linq;
 using System.Text.Json;
 using System.Buffers;
 using ProtoBuf;
@@ -93,6 +94,17 @@ public class RedisGameRoomRepository : IGameRoomRepository, IDisposable
                 : TimeSpan.FromMinutes(_config.GameSessionExpiryMinutes);
 
             await _db.StringSetAsync(key, writer.WrittenMemory, expiry);
+
+            // Sorted Set (ZSET) 방식을 이용한 활성 게임방 목록 관리 (클러스터 호환 및 N+1 쿼리 방지)
+            if (gameRoom.Phase == Domain.Enums.GamePhase.GameOver)
+            {
+                await _db.SortedSetRemoveAsync("active_rooms", gameRoom.RoomId);
+            }
+            else
+            {
+                var score = DateTimeOffset.UtcNow.Add(expiry).ToUnixTimeSeconds();
+                await _db.SortedSetAddAsync("active_rooms", gameRoom.RoomId, score);
+            }
         }
         catch (Exception ex)
         {
@@ -154,16 +166,24 @@ public class RedisGameRoomRepository : IGameRoomRepository, IDisposable
     /// </summary>
     public async Task<List<string>> GetActiveRoomIdsAsync(int limit = 100)
     {
-        var server = _redis.GetServer(_redis.GetEndPoints().First());
-        var keys = new List<string>();
-
-        await foreach (var key in server.KeysAsync(pattern: "gameroom:*"))
+        try
         {
-            keys.Add(key.ToString().Replace("gameroom:", ""));
-            if (keys.Count >= limit) break;
-        }
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        return keys;
+            // 1. 만료된 방 데이터 벌크 삭제 (O(log(N) + M) 단일 연산으로 클러스터 부하 및 지연 극적 감소)
+            // 
+            await _db.SortedSetRemoveRangeByScoreAsync("active_rooms", double.NegativeInfinity, now);
+
+            // 2. 최대 limit 개수만큼만 활성 방 ID 조회
+            var members = await _db.SortedSetRangeByRankAsync("active_rooms", 0, limit - 1);
+
+            return members.Select(m => m.ToString()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get active room IDs from Redis Sorted Set");
+            return new List<string>();
+        }
     }
 
     /// <summary>

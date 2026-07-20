@@ -45,19 +45,29 @@ public class RedisConfiguration
     /// </summary>
     public ConfigurationOptions ToConfigurationOptions()
     {
-        var options = new ConfigurationOptions
-        {
-            EndPoints = { ConnectionString },
-            Password = Password,
-            DefaultDatabase = Database,
-            ConnectRetry = ConnectRetry,
-            ConnectTimeout = ConnectTimeout,
-            SyncTimeout = SyncTimeout,
-            AbortOnConnectFail = false,  // Redis 없어도 서버는 시작
-            AllowAdmin = false,
-            Ssl = false
-        };
+        // StackExchange.Redis에서 제공하는 파서로 콤마로 연결된 문자열을 파싱해 내부 IP 목록 객체로 분리 등록을 지원한다.
+        var options = ConfigurationOptions.Parse(ConnectionString);
+    
+        options.Password = Password;
 
+        // Redis 클러스터는 0번 데이터베이스만 지원하므로, 다중 엔드포인트가 지정된 경우 0으로 자동 교정합니다.
+        if (options.EndPoints.Count > 1 && Database != 0)
+        {
+            Console.WriteLine($"[Warning] Redis Cluster only supports database index 0. Configured database {Database} is overridden to 0.");
+            options.DefaultDatabase = 0;
+        }
+        else
+        {
+            options.DefaultDatabase = Database;
+        }
+
+        options.ConnectRetry = ConnectRetry;
+        options.ConnectTimeout = ConnectTimeout;
+        options.SyncTimeout = SyncTimeout;
+        options.AbortOnConnectFail = false;
+        options.AllowAdmin = false;
+        options.Ssl = false;
+        
         return options;
     }
 }

@@ -1,4 +1,4 @@
-.PHONY: build clean restore rebuild run-server run-client test test-perf test-load benchmark docker-up docker-down docker-restart docker-logs docker-ps docker-benchmark k3d-image
+.PHONY: build clean restore rebuild run-server run-client test test-perf test-load benchmark docker-up docker-down docker-restart docker-logs docker-ps docker-benchmark k3d-image redis-cluster-check redis-cluster-monitor docker-cluster-up docker-cluster-down docker-cluster-start
 
 # 솔루션 파일 지정
 SOLUTION = HexWar.sln
@@ -81,3 +81,20 @@ DOCKERFILE_PATH ?= src/HexWar.Server/Dockerfile
 k3d-image:
 	docker build -t $(IMAGE_NAME) -f $(DOCKERFILE_PATH) .
 	k3d image import $(IMAGE_NAME) -c $(K3D_CLUSTER_NAME)
+
+redis-cluster-check:
+	docker exec -it redis-node-1 redis-cli cluster info
+	docker exec -it redis-node-1 redis-cli cluster nodes
+
+redis-cluster-monitor:
+	docker exec -it redis-node-1 redis-cli monitor
+
+docker-cluster-up:
+	docker compose -f docker-compose.cluster.yml up -d --build
+
+docker-cluster-down:
+	docker compose -f docker-compose.cluster.yml down
+
+docker-cluster-start: docker-cluster-up
+	docker compose -f docker-compose.cluster.yml logs -f
+
