@@ -66,7 +66,7 @@ services:
       - redis-node-4
       - redis-node-5
       - redis-node-6
-    entrypoint: >
+    entrypoint: > # 자동 분배를 통하여 마스터 복제본 노드 할당 --cluster-replicas 1 = 복제본을 1개씩 기반 할당
       sh -c "sleep 5 && echo 'yes' | redis-cli --cluster create  redis-node-1:6379 redis-node-2:6379 redis-node-3:6379  redis-node-4:6379 redis-node-5:6379 redis-node-6:6379  --cluster-replicas 1"
     networks:
       - hexwar-network
