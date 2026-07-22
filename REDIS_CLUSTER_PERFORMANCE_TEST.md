@@ -4,7 +4,7 @@
 
 ---
 
-## 1. Redis 순수 I/O 작업 성능 비교 (`redis-benchmark`)
+## 1. Redis I/O 성능 비교 (`redis-benchmark`)
 
 `redis-benchmark` 도구를 사용하여 동일 부하 조건(100,000건의 GET/SET 작업, 50개 동시 연결)에서 단일 노드와 3마스터-3복제본 클러스터 노드의 처리량(TPS) 및 지연율을 비교 측정했습니다.
 
