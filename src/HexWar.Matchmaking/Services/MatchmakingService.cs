@@ -113,6 +113,16 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
         var playerId = request.PlayerId;
         _logger.LogInformation("Player {PlayerId} joined matchmaking queue", playerId);
 
+        // 로그 수집기 연동용 JSON 구조화된 Console.WriteLine 로그
+        var joinLog = new
+        {
+            Timestamp = DateTime.UtcNow.ToString("o"),
+            Level = "INFO",
+            Event = "PlayerJoinedQueue",
+            PlayerId = playerId
+        };
+        Console.WriteLine(JsonSerializer.Serialize(joinLog));
+
         // 이미 큐에 있는지 확인
         if (_waitingPlayers.ContainsKey(playerId))
         {
@@ -219,6 +229,18 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
 
             _logger.LogInformation("Match found and room created: {RoomId}, Player1={P1}, Player2={P2}", 
                 roomId, e.Player1.PlayerId, e.Player2.PlayerId);
+
+            // 로그 수집기 연동용 JSON 구조화된 Console.WriteLine 로그
+            var matchLog = new
+            {
+                Timestamp = DateTime.UtcNow.ToString("o"),
+                Level = "INFO",
+                Event = "MatchFound",
+                RoomId = roomId,
+                Player1 = e.Player1.PlayerId,
+                Player2 = e.Player2.PlayerId
+            };
+            Console.WriteLine(JsonSerializer.Serialize(matchLog));
 
             // Agones GameServer Allocate (할당)
             if (_agones != null)
