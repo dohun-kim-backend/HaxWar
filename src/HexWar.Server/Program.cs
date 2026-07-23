@@ -7,6 +7,7 @@ using HexWar.Matchmaking.Services;
 using HexWar.Server.BackgroundServices;
 using HexWar.Server.WebSocket;
 using StackExchange.Redis;
+using Agones;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,8 +75,9 @@ builder.Services.AddSingleton<MatchmakingService>(sp =>
     var queue = sp.GetRequiredService<MatchmakingQueue>();
     var sessionRegistry = sp.GetRequiredService<SessionRegistry>();
     var logger = sp.GetRequiredService<ILogger<MatchmakingService>>();
+    var agones = sp.GetService<IAgonesSDK>();
     var redis = sp.GetService<IConnectionMultiplexer>();
-    return new MatchmakingService(queue, sessionRegistry, logger, redis);
+    return new MatchmakingService(queue, sessionRegistry, logger, agones, redis);
 });
 
 // gRPC 서비스
@@ -84,6 +86,10 @@ builder.Services.AddGrpcReflection();
 
 // 정리 백그라운드 서비스 등록
 builder.Services.AddHostedService<SessionCleanupService>();
+
+// Agones SDK 등록 및 헬스 체크 서비스 추가
+builder.Services.AddSingleton<IAgonesSDK>(new AgonesSDK());
+builder.Services.AddHostedService<AgonesHealthService>();
 
 // DiagnosticsMetrics 싱글톤 등록 (런타임 자동 계측 에이전트가 HexWar.Diagnostics Meter를 자동 감지함)
 builder.Services.AddSingleton<HexWar.Server.Diagnostics.DiagnosticsMetrics>();
@@ -103,6 +109,21 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var app = builder.Build();
+
+// 앱 시작 시 Agones에 Ready 상태 전송
+app.Lifetime.ApplicationStarted.Register(() => 
+{
+    try 
+    {
+        var agones = app.Services.GetRequiredService<IAgonesSDK>();
+        agones.ReadyAsync().GetAwaiter().GetResult();
+        app.Logger.LogInformation("Agones GameServer is now Ready.");
+    } 
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Failed to send Agones Ready status. (Ignored in local execution)");
+    }
+});
 
 // 미들웨어 구성
 

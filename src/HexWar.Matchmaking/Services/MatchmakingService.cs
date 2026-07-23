@@ -11,6 +11,7 @@ using HexWar.Application.Sessions;
 using HexWar.Matchmaking;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
+using Agones;
 
 /// <summary>
 /// gRPC 매치메이킹 서비스 구현체
@@ -20,6 +21,7 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
     private readonly MatchmakingQueue _queue;
     private readonly SessionRegistry _sessionRegistry;
     private readonly ILogger<MatchmakingService> _logger;
+    private readonly IAgonesSDK? _agones;
     private readonly ISubscriber? _sub;
     
     // 매칭 완료된 플레이어에게 결과를 전달하기 위한 채널과 비동기 완료 알림용 TaskCompletionSource
@@ -29,11 +31,13 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
         MatchmakingQueue queue,
         SessionRegistry sessionRegistry,
         ILogger<MatchmakingService> logger,
+        IAgonesSDK? agones = null,
         IConnectionMultiplexer? redis = null)
     {
         _queue = queue;
         _sessionRegistry = sessionRegistry;
         _logger = logger;
+        _agones = agones;
         
         // 매칭 완료 이벤트 구독
         _queue.OnMatchFound += OnMatchFound;
@@ -215,6 +219,20 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
 
             _logger.LogInformation("Match found and room created: {RoomId}, Player1={P1}, Player2={P2}", 
                 roomId, e.Player1.PlayerId, e.Player2.PlayerId);
+
+            // Agones GameServer Allocate (할당)
+            if (_agones != null)
+            {
+                try
+                {
+                    await _agones.AllocateAsync();
+                    _logger.LogInformation("Agones GameServer Allocated for room {RoomId}", roomId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to call Agones AllocateAsync");
+                }
+            }
 
             if (_sub != null)
             {

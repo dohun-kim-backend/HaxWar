@@ -3,12 +3,16 @@ namespace HexWar.Server.BackgroundServices;
 using HexWar.Application.Sessions;
 using HexWar.Domain.Enums;
 using HexWar.Infrastructure.WebSocket;
+using Agones;
+using Microsoft.Extensions.Hosting;
 
 public class SessionCleanupService : BackgroundService
 {
     private readonly SessionRegistry _sessionRegistry;
     private readonly ConnectionManager _connectionManager;
     private readonly ILogger<SessionCleanupService> _logger;
+    private readonly IAgonesSDK? _agones;
+    private readonly IHostApplicationLifetime _appLifetime;
 
     // TimeSpan 자료형 이란 ? 특정 시간의 간격을 나타내는 값
     private readonly TimeSpan _cleanupInterval = TimeSpan.FromMinutes(3);
@@ -18,11 +22,15 @@ public class SessionCleanupService : BackgroundService
     public SessionCleanupService(
         SessionRegistry sessionRegistry,
         ConnectionManager connectionManager,
-        ILogger<SessionCleanupService> logger)
+        ILogger<SessionCleanupService> logger,
+        IHostApplicationLifetime appLifetime,
+        IAgonesSDK? agones = null)
     {
         _sessionRegistry = sessionRegistry;
         _connectionManager = connectionManager;
         _logger = logger;
+        _appLifetime = appLifetime;
+        _agones = agones;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -83,6 +91,23 @@ public class SessionCleanupService : BackgroundService
             _logger.LogInformation(
                 "Cleaned {Count} sessions. Active connections: {Connections}",
                 cleanupCount, _connectionManager.GetTotalConnectionCount());
+            
+            var remainingSessions = _sessionRegistry.GetActiveSessions().Count();
+            if (remainingSessions == 0 && _agones != null)
+            {
+                _logger.LogInformation("All sessions ended. Initiating Agones Shutdown.");
+                try
+                {
+                    await _agones.ShutDownAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to call Agones ShutDownAsync");
+                }
+                
+                // 애플리케이션 종료 트리거
+                _appLifetime.StopApplication();
+            }
         }
     }
 
