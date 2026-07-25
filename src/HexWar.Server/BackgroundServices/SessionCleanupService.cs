@@ -93,20 +93,24 @@ public class SessionCleanupService : BackgroundService
                 cleanupCount, _connectionManager.GetTotalConnectionCount());
             
             var remainingSessions = _sessionRegistry.GetActiveSessions().Count();
-            if (remainingSessions == 0 && _agones != null)
+            if (_agones != null)
             {
-                _logger.LogInformation("All sessions ended. Initiating Agones Shutdown.");
                 try
                 {
-                    await _agones.ShutDownAsync();
+                    await _agones.Beta().SetCounterCountAsync("sessions", remainingSessions);
+                    
+                    if (remainingSessions == 0)
+                    {
+                        _logger.LogInformation("All sessions ended. Initiating Agones Shutdown.");
+                        await _agones.ShutDownAsync();
+                        // 애플리케이션 종료 트리거
+                        _appLifetime.StopApplication();
+                    }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to call Agones ShutDownAsync");
+                    _logger.LogError(ex, "Failed to call Agones SDK during cleanup");
                 }
-                
-                // 애플리케이션 종료 트리거
-                _appLifetime.StopApplication();
             }
         }
     }

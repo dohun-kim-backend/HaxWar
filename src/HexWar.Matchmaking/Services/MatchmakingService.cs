@@ -242,17 +242,23 @@ public class MatchmakingService : HexWar.Matchmaking.MatchmakingService.Matchmak
             };
             Console.WriteLine(JsonSerializer.Serialize(matchLog));
 
-            // Agones GameServer Allocate (할당)
+            // Agones GameServer Allocate 및 Counter 업데이트
             if (_agones != null)
             {
                 try
                 {
-                    await _agones.AllocateAsync();
-                    _logger.LogInformation("Agones GameServer Allocated for room {RoomId}", roomId);
+                    var activeCount = _sessionRegistry.GetActiveSessions().Count;
+                    if (activeCount == 1)
+                    {
+                        await _agones.AllocateAsync();
+                        _logger.LogInformation("Agones GameServer Allocated for room {RoomId}", roomId);
+                    }
+                    
+                    await _agones.Beta().SetCounterCountAsync("sessions", activeCount);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to call Agones AllocateAsync");
+                    _logger.LogError(ex, "Failed to call Agones SDK");
                 }
             }
 
