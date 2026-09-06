@@ -10,7 +10,7 @@
   - [3.1 gRPC와 WebSocket 혼용 구성](#31-grpc와-websocket-혼용-구성)
   - [3.2 Redis 클러스터 기반 분산 동기화 및 고가용성](#32-redis-클러스터-기반-분산-동기화-및-고가용성)
   - [3.3 가비지 컬렉션(GC) 최적화 설계](#33-가비지-컬렉션gc-최적화-설계)
-  - [3.4 Nginx 및 OS 설정을 통한 TCP 커넥션 최적화](#34-nginx-및-os-설정을-통한-tcp-커넥션-최적화)
+  - [3.4 시계열 유닛 이동 및 조우 판정을 위한 SortedList 자료구조 설계](#34-시계열-유닛-이동-및-조우-판정을-위한-sortedlist-자료구조-설계)
 - [부하 테스트 검증 데이터](#부하-테스트-검증-데이터)
 - [로컬 실행 방법](#로컬-실행-방법)
 
@@ -50,7 +50,7 @@ WebSocket은 수신 버퍼에서 미리 약속한 식별 코드 바이트만 읽
 
 ---
 
-### 3.2 Redis 클러스터 기반 분산 동기화 및 고가용성
+### 3.2 시스템 내 Redis 활용 사례
 
 ```
 [Client A] (Node 1 접속)               [Client B] (Node 2 접속)
@@ -59,52 +59,37 @@ WebSocket은 수신 버퍼에서 미리 약속한 식별 코드 바이트만 읽
       ▼                                      ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                  Redis Cluster (3M-3R)                       │
-│  - Sharded State Store (Protobuf)                            │
-│  - Distributed Lock (SETNX / TTL)                            │
-│  - Event Sync Broker (Pub/Sub)                               │
+│  - Sharded State Store (Protobuf Binary Storage)             │
+│  - Event Sync Broker (Pub/Sub + Self-Publish Bypass)         │
+│  - Distributed Lock (SETNX / TTL + Lua Script Safe Release)  │
+│  - Global Matchmaking Queue (List FIFO + Hash Storage)       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ### 문제
-2,000명 이상의 대규모 사용자 수용을 위해 서버 수평 확장이 필수적이라고 생각하였으나, 다음과 같은 문제가 발생할 수 있다고 예상되었으며, 이를 해결하기 위해 Redis 클러스터를 통한 고가용성 확보가 필요하다고 생각하였습니다.
-1. **Hot-Partition 문제**: 특정 서버에 부하가 몰리는 현상.
-2. **단일 장애점(SPOF)**: Redis 단일 노드 사용 시 노드가 죽으면 서비스가 중단됨과 동시에 데이터가 유실.
-3. **수용량 한계**: 단일 노드가 처리할 수 있는 요청량에는 한계가 존재.
+2,000명 이상의 대규모 사용자 수용을 위해 서버 수평 확장이 필수적이었으나, 노드 분산에 따른 상태 동기화 및 동시성 제어 시 다음과 같은 문제가 발생할 수 있다고 예상되었습니다.
+1. **분산 노드 간 상태 불일치**: 서로 다른 물리 서버에 접속한 유저 간 실시간 인게임 이벤트 전파의 어려움.
+2. **동시 접근 레이스 컨디션**: 여러 서버가 동일한 게임방/매칭 대기열 상태에 동시에 접근할 때 Lost Update 발생.
+3. **단일 장애점(SPOF) 및 수용량 한계**: 단일 Redis 노드 장애 시 전체 서비스 중단 및 I/O 병목 현상.
 
-### 행동
-- **데이터 경량화**: 전체 게임 상태를 `Protobuf` 형식의 바이트(Byte) 데이터로 직렬화하여 네트워크 대역폭 및 메모리 사용량을 줄이도록 압축하여 Redis에 저장하였습니다.
-- **분산락 구성**: 저장된 데이터에 대하여 동시 접근을 방지하기 위해 `SETNX` 명령과 만료 시간(TTL) 설정을 이용한 분산 락을 구현하여 분산 노드 간 레이스 컨디션으로 인한 데이터 불일치를 방지하였습니다.
-- **이벤트 전파 및 하이브리드 버퍼**: Redis Pub/Sub 채널 구독 모델을 통해 모든 물리 서버 노드에 동일 인게임 이벤트를 실시간 브로드캐스팅하였습니다. 또한 Pub/Sub의 메시지 무손실 보장 부재를 극복하기 위해 서버 내부에 고정 크기 `CircularBuffer`를 구축해 일시적인 네트워크 순단 시 무손실 복구 경로를 확립했습니다.
-- **Master - Replica 클러스터 구성**: `StackExchange.Redis` 라이브러리를 통해 16,384개의 해시 슬롯을 관리하고, 클러스터의 마스터 노드에 직접 통신하여 최단 거리 통신을 하도록 구성하였습니다. 이를 통해 복잡한 라우팅 로직을 애플리케이션 레벨이 아닌 Redis 라이브러리 레벨에서 처리하도록 구현하였습니다.
-- **자동 장애 조치**: `StackExchange.Redis` 클라이언트의 내부 자동 복구 기능을 통해 마스터 노드 장애 시 클러스터의 다른 노드들에게 `CLUSTER SLOTS` 명령으로 슬롯 배치를 재조회하고 요청을 자동으로 재라우팅합니다.
+### 해결 방안 및 핵심 구현
 
-### 검증 결과
-*자세한 실측 데이터와 재현 시나리오는 [REDIS_CLUSTER_PERFORMANCE_TEST.md](https://github.com/opt-dohun/HaxWar/blob/main/REDIS_CLUSTER_PERFORMANCE_TEST.md) 문서에 기록되어 있습니다.*
+- **① Pub/Sub 기반 분산 노드 이벤트 브로드캐스트**:
+  - Redis Pub/Sub 채널(`game_events:{roomId}`)을 통해 특정 방에서 발생한 인게임 이벤트를 전체 서버 노드에 실시간 전파하였습니다.
+  - **Self-Publishing Loop 방지**: 메시지 패킷에 `SourceServerId`를 동시 발행하여, 자기가 발행한 이벤트는 수신 시 즉시 무시(`SourceServerId == ServerIdentity.Id`)하도록 제어해 무한 루프를 방지했습니다.
+  - **CircularBuffer 사용 재전송 로직 부재 보안**: Pub/Sub의 메시지 무손실 미보장 특성을 극복하고자 서버 내부 고정 크기 `CircularBuffer`에 패킷 순서를 로컬 적재하여 일시적 순단 시 Redis 재조회 없이 즉시 무손실 복구를 구현하였습니다.
 
-#### A. 마스터 노드 장애 복구 테스트
-부하 테스트(200명 동시 접속) 도중 마스터 노드 중 하나인 `redis-node-3`을 강제 중단시키는 상황을 연출하여 테스트하였습니다.
-```bash
-# 1. 마스터 노드 정지
-docker compose -f docker-compose.cluster.yml stop redis-node-3
+- **② SETNX 및 Lua 스크립트 기반 분산 락**:
+  - `SETNX` (SET ... NX PX) 명령과 만료 시간(TTL) 설정을 이용해 게임방 상태 변경 및 매칭 처리 시 분산 락을 구성했습니다.
+  - **Lua 스크립트 안전 해제**: TTL 만료 후 타 노드가 획득한 락을 오삭제하는 현상을 막기 위해, `GET`으로 조회한 `LockId`가 자신이 소유한 락일 때만 원자적으로 `DEL`을 수행하는 Lua 스크립트를 적용하였습니다.
 
-# 2. 클러스터 장애 복구 확인 로그 (cluster nodes)
-2fa6c02f... 172.20.0.6:6379 master,fail - 1784544325878 1784544323297 3 disconnected # 연결 유무
-b0932f8d... 172.20.0.3:6379 master - 0 1784544333127 7 connected 10923-16383  # 슬롯 인계
-```
-*   `redis-node-3`이 다운된 이후 복제본인 `redis-node-6`이 **마스터로 자동 승격**되어 해시 슬롯(`10923-16383`)을 완전히 인계받아 정상 운용되는 것을 확인하였습니다.
-*   이 장애 조치 과정에서 StackExchange.Redis 클라이언트 내부에서 자동으로 슬롯 재배치를 수행하여 **애플리케이션 오류는 단 1건도 발생하지 않고 수행**하는 것을 확인하였습니다.
+- **③ Redis List + Hash 기반 전역 매칭 대기열**:
+  - **List + Hash 구조 분리**: FIFO 대기열은 Redis List(`RPUSH` / `LPOP`)로 경량 관리하고, 플레이어 상세 정보(레이팅, 진입시간)는 Redis Hash(`HSET` / `HGET`)에 분리 저장하여 I/O 효율성을 극대화했습니다.
+  - **다중 노드 매칭 동기화**: 여러 매칭 서버 노드가 동시에 매칭 처리 함수를 실행할 때 동일 플레이어 중복 인출을 방지하고자 `lock:matchmaking:queue` 분산 락을 획득한 노드만 팝(Pop) 및 방 생성을 전담하도록 구현했습니다.
 
-#### B. 수평적 수용량 확장 테스트
-동일 조건(10만 건 처리, 50개 커넥션) 하에 단일 Node 환경과 3-Master 클러스터 노드 환경의 성능을 비교하였습니다.
-
-| 지표 (Metric) | 단일 Redis (Standalone) | Redis 클러스터 (Cluster) | 개선률 |
-| :--- | :---: | :---: | :---: |
-| **SET 처리량 (Throughput)** | 50,100.20 TPS | **199,600.80 TPS** | **+298.4% (약 4배)** |
-| **GET 처리량 (Throughput)** | 55,741.36 TPS | **400,000.00 TPS** | **+617.8% (약 7배)** |
-| **SET 지연율 (Median Latency)** | 0.127 ms | **0.063 ms** | **-50.4% (2배 단축)** |
-| **GET 지연율 (Median Latency)** | 0.119 ms | **0.055 ms** | **-53.8% (2.1배 단축)** |
-
-클러스터링을 통한 병렬 분산 처리를 통해 **처리량이 약 4배 확장**되었으며, Direct Routing 최적화로 인해 평균 응답 속도 지연(0.05~0.06ms)도 단일 노드 대비 2배로 개선할 수 있었습니다.
+- **④ Protobuf 상태 압축 및 클러스터 고가용성 (HA)**:
+  - 전체 게임 상태를 `Protobuf` 바이트 데이터로 직렬화하여 네트워크 대역폭 및 메모리를 압축 저장했습니다.
+  - `StackExchange.Redis`를 통해 16,384개 해시 슬롯의 마스터 노드 다이렉트 라우팅을 구성하고, 마스터 장애 발생 시 `CLUSTER SLOTS` 기반의 자동 슬롯 재배치 및 라우팅을 적용했습니다.
 
 ---
 
@@ -157,45 +142,47 @@ dotnet run -c Release --project tests/HexWar.LoadTests -- http://localhost:5020 
 
 ---
 
-### 3.4 Nginx 및 OS 설정을 통한 TCP 커넥션 최적화
+### 3.4 시계열 유닛 이동 및 조우 판정을 위한 SortedList 자료구조 설계
 
 ### 문제
-부하 테스트 진행 중 Nginx 액세스 로그에서 클라이언트가 응답 지연으로 인해 연결을 강제 종료하는 499 Client Closed Request 에러가 발생했습니다. 원인은 Nginx의 기본 worker_connections 제한(1024)과 파일 디스크립터(nofile) 한도로 인해, 다수의 동시 연결을 수용하지 못하는 구조적 한계에 있는 것을 확인하였습니다.
+인게임 유닛은 간선(Edge)을 따라 이동하며 목적지 노드까지 1~2라운드 이상의 시간이 소요됩니다. 같은 간선 상에서 상대 진영 유닛과 마주치는 '조우(Encounter)' 판정 및 라운드 경과에 따른 이동 시계열 상태를 관리해야 했습니다.
+이때 단순 2차원 배열이나 `List<List<TravelingGroup>>`을 사용할 경우 다음과 같은 구조적 부작용이 발생했습니다.
+1. **불필요한 인덱스 패딩 메모리 낭비**: 유닛이 존재하지 않는 라운드 간격까지 빈 배열 요소를 채워 넣어야 하는 희소(Sparse) 데이터 공간 낭비 발생.
+2. **배열 Shift 연산 오버헤드**: 매 라운드가 진행될 때마다 모든 요소를 한 칸씩 앞으로 당겨야 하는 `O(N)` 배열 재배치 비용 발생.
+
+### 접근
+남은 라운드 수(`remainingRounds`) 자체를 오름차순 Key로 지정하는 **`SortedList<int, List<TravelingGroup>>`** 자료구조를 도입하여 시계열 데이터 표현을 최적화하고자 했습니다.
 
 ### 행동
-- Nginx 설정에서 CPU 코어 수에 맞춰 프로세스를 자동 지정하는 `worker_processes auto`를 사용하고 워커당 동시 커넥션 한도를 10240으로 설정하였습니다. 추가로 OS 커널 파라미터를 조정하여 포트 고갈과 연결 유실을 방지했습니다.
+- **희소(Sparse) 데이터 공간 최적화**: 남은 라운드 수 자체를 Key로 활용함으로써 유닛이 존재하는 라운드 정보만 메모리에 유지하도록 구현했습니다.
+- **도착 및 조우(Encounter) 고속 판정 경로 구축**:
+  - `AdvanceRound()`: 매 라운드 진행 시 Key-1 갱신을 수행하여 남은 라운드가 0 이하가 된 도착 임박 유닛을 빠르게 인출.
+  - `FindAllEncounters()`: 동일 Key(동일 남은 거리) 위치에 서로 다른 진영(`PlayerSide.A` vs `PlayerSide.B`) 유닛 그룹이 공존하는지 탐색하여 조우 이벤트를 처리.
 
-### Nginx 설정
+```csharp
+// src/HexWar.Domain/Entities/Edge.cs
+public class Edge
+{
+    // Key : 남은 라운드 수 / Value : 해당 라운드에 위치한 유닛 그룹 리스트
+    public SortedList<int, List<TravelingGroup>> TravelingUnits { get; private set; } = new();
 
-*   `worker_processes auto`: CPU 코어 수만큼 워커 프로세스를 자동 생성하고, `worker_connections`를 10240으로 상향 조정했습니다.
-*   WebSocket 프록시 환경에서는 클라이언트와 백엔드 각각에 하나씩 총 2개의 소켓을 사용하므로, 워커당 최대 5,120개의 동시 접속을 수용할 수 있습니다.
-*   파일 디스크립터 고갈을 방지하기 위해 `worker_rlimit_nofile`을 20480으로 설정하여, 실제 소켓 소비량의 2배 여유를 확보했습니다.
-
-### OS 커널 파라미터 설정
-
-*   `net.core.somaxconn = 65535`: TCP Accept Queue의 최대 길이를 확장해, 연결 폭주 시에도 SYN 패킷이 드롭되지 않도록 설정
-*   `net.ipv4.tcp_max_syn_backlog = 8192`: SYN Queue를 확장하여 3-way handshake 완료 전 대기 중인 연결의 유실을 방지
-*   `net.ipv4.ip_local_port_range = 1024 65000`: 백엔드와의 연결에 사용할 임시 포트 범위를 넓혀 포트 고갈 현상을 방지하였습니다.
-*   `net.ipv4.tcp_tw_reuse = 1`: 기존 TIME_WAIT 상태를 통해 통신 종료 이후에도 소켓을 일정 시간 유지하는 구조에서 연결 요청 시 소켓을 재사용을 허용하도록 설정하였습니다.
-
-### 최적화 이후 성능 지표
-```bash
-# 1. 인프라 컨테이너 구동
-docker compose up -d --build
-
-# 2. 2,000명 동시접속 부하 테스트 수행 (1,000개 게임방, 60초)
-dotnet run -c Release --project tests/HexWar.LoadTests -- http://localhost:5020 1000 60
-
-# 3. Nginx 예외 및 에러 로그 검증
-docker logs hexwar-nginx 2>&1 | grep -iE "error|crit|alert|emerg|warn"
+    // 조우(Encounter) 판정 로직
+    public bool HasEncounter(int roundRemaining, out List<TravelingGroup>? groups)
+    {
+        if (TravelingUnits.TryGetValue(roundRemaining, out groups) && groups.Count > 1)
+        {
+            var sides = groups.Select(g => g.Side).Distinct();
+            return sides.Count() > 1; // 동일 위치에 양 진영 유닛이 공존할 때 조우 발생
+        }
+        groups = null;
+        return false;
+    }
+}
 ```
 
-#### 동시접속 규모별(2,000명 vs 4,000명) 실제 테스트 검증 지표
-| 측정 메트릭 | 2,000명 부하 (1,000개 방) | 4,000명 부하 (2,000개 방) | 기술적 검증 의미 |
-| --- | --- | --- | --- |
-| **연결 성공률** | **100% (2,000/2,000)** | **100% (4,000/4,000)** |  |
-| **502 Bad Gateway 에러율** | **0% (0건)** | **0% (0건)** | 4000명 총 8000개의 FD 가량 생성되었음에도 연결 오류 발생 방지 확인 |
-| **평균 이동 지연 시간** | **0.00 ms (P99 0.02 ms)** | **0.01 ms (P99 0.01 ms)** | 연결 수 증가에도 지연시간의 급증은 발생하지 않음  |
+### 결과
+- 유닛이 존재하지 않는 라운드 간격의 배열 패딩을 제거하여 메모리 할당을 최소화하였습니다.
+- 남은 거리가 정렬된 상태를 유지함으로써 도착 유닛 순회 및 조우 판정의 연산 복잡도를 개선하고 턴 진행의 데이터 일관성을 확보하였습니다.
 
 ---
 
